@@ -33,6 +33,32 @@ class KL_Sitemap_Model_Resource_Catalog_Category extends Mage_Sitemap_Model_Reso
      */
     public function getCollection($storeId)
     {
+        return $this->_versionCheck($storeId);
+    }
+
+    /**
+     * Check Magento versions because in 1.8 the core for collection has been changed.
+     *
+     * @param int $storeId
+     * @return array
+     */
+    protected function _versionCheck($storeId)
+    {
+        if (version_compare(Mage::getVersion(), '1.8', '>=')){
+            return $this->getCollection18($storeId);
+        } else {
+            return $this->getCollection17($storeId);
+        }
+    }
+
+    /**
+     * Get category collection array
+     *
+     * @param int $storeId
+     * @return array
+     */
+    public function getCollection18($storeId)
+    {
         /* @var $store Mage_Core_Model_Store */
         $store = Mage::app()->getStore($storeId);
         if (!$store) {
@@ -66,6 +92,51 @@ class KL_Sitemap_Model_Resource_Catalog_Category extends Mage_Sitemap_Model_Reso
     }
 
     /**
+     * Get category collection array
+     *
+     * @param int $storeId
+     * @return array
+     */
+    public function getCollection17($storeId)
+    {
+        $categories = array();
+        $store = Mage::app()->getStore($storeId);
+        /* @var $store Mage_Core_Model_Store */
+        if (!$store) {
+            return false;
+        }
+        $this->_select = $this->_getWriteAdapter()->select()
+            ->from($this->getMainTable())
+            ->where($this->getIdFieldName() . '=?', $store->getRootCategoryId());
+        $categoryRow = $this->_getWriteAdapter()->fetchRow($this->_select);
+        if (!$categoryRow) {
+            return false;
+        }
+        $urConditions = array(
+            'e.entity_id=ur.category_id',
+            $this->_getWriteAdapter()->quoteInto('ur.store_id=?', $store->getId()),
+            'ur.product_id IS NULL',
+            $this->_getWriteAdapter()->quoteInto('ur.is_system=?', 1),
+        );
+        $this->_select = $this->_getWriteAdapter()->select()
+            ->from(array('e' => $this->getMainTable()), array($this->getIdFieldName()))
+            ->joinLeft(
+                array('ur' => $this->getTable('core/url_rewrite')),
+                join(' AND ', $urConditions),
+                array('url'=>'request_path')
+            )
+            ->where('e.path LIKE ?', $categoryRow['path'] . '/%');
+        $this->_addFilter($storeId, 'is_active', 1);
+        $this->_select->columns('updated_at');
+        $query = $this->_getWriteAdapter()->query($this->_select);
+        while ($row = $query->fetch()) {
+            $category = $this->_prepareCategory($row);
+            $categories[$category->getId()] = $category;
+        }
+        return $categories;
+    }
+
+    /**
      * Prepare catalog object
      *
      * @param array $row
@@ -78,5 +149,21 @@ class KL_Sitemap_Model_Resource_Catalog_Category extends Mage_Sitemap_Model_Reso
         $entity->setUrl($this->_getEntityUrl($row, $entity));
         $entity->setUpdatedAt($row['updated_at']);
         return $entity;
+    }
+
+    /**
+     * Prepare category - Magento < 1.8 compatibility
+     *
+     * @param array $categoryRow
+     * @return Varien_Object
+     */
+    protected function _prepareCategory(array $categoryRow)
+    {
+        $category = new Varien_Object();
+        $category->setId($categoryRow[$this->getIdFieldName()]);
+        $categoryUrl = !empty($categoryRow['url']) ? $categoryRow['url'] : 'catalog/category/view/id/' . $category->getId();
+        $category->setUrl($categoryUrl);
+        $category->setUpdatedAt($categoryRow['updated_at']);
+        return $category;
     }
 }
